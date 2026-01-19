@@ -169,123 +169,128 @@ if uploaded_file:
 st.markdown("---")
 st.subheader("💾 엑셀 파일 생성")
 
-if st.button("층별 엑셀 파일 생성", type="primary", use_container_width=True):
-    if st.session_state.dong_data and st.session_state.floor_ranges:
-        output = io.BytesIO()
-        
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            for dong_name in sorted(st.session_state.dong_data.keys(), key=lambda x: int(re.search(r'\d+', x).group())):
-                rows = st.session_state.dong_data[dong_name]
-                df = pd.DataFrame(rows)
-                
-                # 층 설정이 있으면 층별로 분리
-                if dong_name in st.session_state.floor_ranges:
-                    combined_data = []
-                    
-                    for floor_name, range_info in st.session_state.floor_ranges[dong_name].items():
-                        floor_type = range_info.get('floor_type', '지상')
-                        start_floor = range_info['start_floor']
-                        end_floor = range_info['end_floor']
-                        
-                        # 전체 층 범위 제목
-                        title_row = [f"[ {floor_name} ]"] + [''] * (df.shape[1] - 1)
-                        combined_data.append(title_row)
-                        
-                        # 각 층별로 데이터 추출
-                        all_rows = df.values.tolist()
-                        
-                        for floor_num in range(start_floor, end_floor + 1):
-                            # 해당 층의 데이터만 필터링
-                            floor_rows = []
-                            capturing = False
-                            skip_section = False  # 정면도/배면도 섹션 스킵용
-                            
-                            for i, row in enumerate(all_rows):
-                                # None 값 안전하게 처리하여 전체 행 텍스트 생성
-                                row_text = ' '.join([str(cell) if cell is not None else '' for cell in row])
-                                
-                                # 정면도/배면도 섹션 시작 감지
-                                if '정면도' in row_text or '배면도' in row_text:
-                                    skip_section = True
+def make_excel_bytes():
+    output = io.BytesIO()
+
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for dong_name in sorted(
+            st.session_state.dong_data.keys(),
+            key=lambda x: int(re.search(r'\d+', x).group())
+        ):
+            rows = st.session_state.dong_data[dong_name]
+            df = pd.DataFrame(rows)
+
+            if dong_name in st.session_state.floor_ranges:
+                combined_data = []
+
+                for floor_name, range_info in st.session_state.floor_ranges[dong_name].items():
+                    floor_type = range_info.get('floor_type', '지상')
+                    start_floor = range_info['start_floor']
+                    end_floor = range_info['end_floor']
+
+                    # 제목 행
+                    title_row = [f"[ {floor_name} ]"] + [''] * (df.shape[1] - 1)
+                    combined_data.append(title_row)
+
+                    all_rows = df.values.tolist()
+
+                    for floor_num in range(start_floor, end_floor + 1):
+                        floor_rows = []
+                        capturing = False
+                        skip_section = False
+
+                        for row in all_rows:
+                            row_text = ' '.join([str(cell) if cell is not None else '' for cell in row])
+
+                            # 정면도/배면도 스킵
+                            if '정면도' in row_text or '배면도' in row_text:
+                                skip_section = True
+                                continue
+
+                            if re.search(r'\d+동\s*\d+층|\d+동\s*(지하|B)\s*\d+층', row_text):
+                                skip_section = False
+
+                            if skip_section:
+                                continue
+
+                            # 제외 키워드 필터
+                            exclude_keywords = [
+                                '부록','외관조사망도','참조','번 호',
+                                '부   위','부 재','폭','mm','길이','개소','EA'
+                            ]
+                            if any(k in row_text for k in exclude_keywords):
+                                continue
+
+                            if floor_type == "지하":
+                                if re.search(rf'\d+동\s*(지하|B)\s*{floor_num}층', row_text):
+                                    capturing = True
+                                    floor_rows.append(row)
                                     continue
-                                
-                                # 층 헤더를 만나면 스킵 섹션 해제
-                                if re.search(r'\d+동\s*\d+층|\d+동\s*(지하|B)\s*\d+층', row_text):
-                                    skip_section = False
-                                
-                                # 스킵 섹션이면 데이터 수집 안 함
-                                if skip_section:
-                                    continue
-                                
-                                # 제외할 행 패턴 (부록 참조 문구, 헤더 행 등)
-                                exclude_keywords = [
-                                    '부록',
-                                    '외관조사망도',
-                                    '참조',
-                                    '번 호',
-                                    '부   위',
-                                    '부 재',
-                                    '폭',
-                                    'mm',
-                                    '길이',
-                                    '개소',
-                                    'EA'
-                                ]
-                                # 제외 키워드가 1개 이상 포함되면 헤더 행으로 판단
-                                keyword_count = sum(1 for keyword in exclude_keywords if keyword in row_text)
-                                if keyword_count >= 1:
-                                    continue
-                                
-                                # 지하층인 경우
-                                if floor_type == "지하":
-                                    # 타겟 층 헤더 발견 (예: [ 2561동 지하1층 ], [ 2561동 B1층 ])
-                                    if re.search(rf'\d+동\s*(지하|B)\s*{floor_num}층', row_text):
+
+                                if capturing and re.search(r'\d+동\s*\d+층|\d+동\s*(지하|B)\s*\d+층', row_text):
+                                    break
+
+                            else:
+                                match = re.search(rf'\d+동\s*(\d+)층', row_text)
+                                if match and "지하" not in row_text and "B" not in row_text:
+                                    if int(match.group(1)) == floor_num:
                                         capturing = True
                                         floor_rows.append(row)
                                         continue
-                                    
-                                    # 다른 층 헤더 발견하면 종료
-                                    if capturing and re.search(r'\d+동\s*\d+층|\d+동\s*(지하|B)\s*\d+층', row_text):
-                                        break
-                                        
-                                # 지상층인 경우
-                                else:
-                                    # 타겟 층 헤더 발견 (예: [ 2561동 1층 ])
-                                    match = re.search(rf'\d+동\s*(\d+)층', row_text)
-                                    if match and "지하" not in row_text and "B" not in row_text:
-                                        found_floor = int(match.group(1))
-                                        if found_floor == floor_num:
-                                            capturing = True
-                                            floor_rows.append(row)
-                                            continue
-                                    
-                                    # 다른 층 헤더 발견하면 종료
-                                    if capturing and re.search(r'\d+동\s*\d+층|\d+동\s*(지하|B)\s*\d+층', row_text):
-                                        break
-                                
-                                # 데이터 수집 중
-                                if capturing:
-                                    floor_rows.append(row)
-                            
-                            # 데이터가 있으면 추가
-                            if floor_rows:
-                                combined_data.extend(floor_rows)
-                    
-                    combined_df = pd.DataFrame(combined_data)
-                    combined_df.to_excel(writer, sheet_name=dong_name[:31], index=False, header=False)
-                else:
-                    # 층 설정 없으면 건너뛰기
-                    continue
-        
-        st.download_button(
-            label="📥 엑셀 다운로드",
-            data=output.getvalue(),
-            file_name="층별_분석.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-    else:
-        st.warning("⚠️ 층별 범위를 먼저 설정해주세요")
+
+                                if capturing and re.search(r'\d+동\s*\d+층|\d+동\s*(지하|B)\s*\d+층', row_text):
+                                    break
+
+                            if capturing:
+                                floor_rows.append(row)
+
+                        if floor_rows:
+                            combined_data.extend(floor_rows)
+
+                combined_df = pd.DataFrame(combined_data)
+                combined_df.to_excel(writer, sheet_name=dong_name[:31], index=False, header=False)
+
+    output.seek(0)
+    return output.getvalue()
+
+# ===== 다운로드 버튼 스타일 (여기에 넣기) =====
+st.markdown(
+    """
+    <style>
+    /* Streamlit 다운로드 버튼을 .btnBlueGreen.btnPush 스타일로 매핑 */
+    div.stDownloadButton > button {
+        color: white;
+        background: #00AE68;
+        box-shadow: 0px 5px 0px 0px #007144;
+        transition: all 0.1s ease-in-out;
+    }
+
+    /* .btnPush:hover 에 해당 */
+    div.stDownloadButton > button:hover {
+        color: white;
+        background: #00AE68;    
+        margin-top: 5px;
+        margin-bottom: 5px;
+        box-shadow: 0px 0px 0px 0px #007144;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# ===== 기존 다운로드 버튼 (그대로 두기) =====
+if st.session_state.dong_data and st.session_state.floor_ranges:
+    st.download_button(
+        label="📥 엑셀 다운로드",
+        data=make_excel_bytes(),
+        file_name="층별_분석.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+else:
+    st.warning("⚠️ 층별 범위를 먼저 설정해주세요")
+
 
 # 사이드바
 with st.sidebar:
